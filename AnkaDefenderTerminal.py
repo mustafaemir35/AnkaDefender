@@ -7,9 +7,9 @@ import threading
 import platform
 
 # ---------------------- AYARLAR ----------------------
-QUARANTINE_DIR = os.path.expanduser("~/.ankasec/quarantine")
-SIGNATURE_FILE = os.path.expanduser("~/.ankasec/signatures/sha256_blacklist.txt")
-LOG_FILE = os.path.expanduser("~/.ankasec/log.json")
+QUARANTINE_DIR = os.path.expanduser("~/.ankantivirus/quarantine")
+SIGNATURE_FILE = os.path.expanduser("~/.ankantivirus/signatures/sha256_blacklist.txt")
+LOG_FILE = os.path.expanduser("~/.ankantivirus/log.json")
 EXCLUSIONS = ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"]
 
 # ---------------------- DİZİN HAZIRLAMA ----------------------
@@ -117,7 +117,7 @@ def threaded_scan(scan_func):
 def main_menu():
     ensure_dirs()
     while True:
-        print("\n--- AnkaSec Antivirüs ---")
+        print("\n--- AnkaAntivirüs ---")
         print("1. Quick Scan")
         print("2. Full Scan")
         print("3. Çıkış")

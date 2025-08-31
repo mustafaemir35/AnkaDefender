@@ -9,8 +9,8 @@ import tkinter as tk
 from tkinter import scrolledtext
 
 # ---------------------- AYARLAR ----------------------
-QUARANTINE_DIR = os.path.expanduser("~/.ankasec/quarantine")
-LOG_FILE = os.path.expanduser("~/.ankasec/log.json")
+QUARANTINE_DIR = os.path.expanduser("~/.ankantivirus/quarantine")
+LOG_FILE = os.path.expanduser("~/.ankantivirus/log.json")
 EXCLUSIONS = ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"]
 
 # ---------------------- TEST İMZASI ----------------------
@@ -119,10 +119,10 @@ def threaded_scan(scan_func):
 def start_gui():
     global output_text
     root = tk.Tk()
-    root.title("AnkaSec Antivirüs")
+    root.title("AnkaAntivirüs")
     root.geometry("800x500")
 
-    tk.Label(root, text="AnkaSec Antivirüs", font=("Arial", 16, "bold")).pack(pady=10)
+    tk.Label(root, text="AnkaAntivirüs", font=("Arial", 16, "bold")).pack(pady=10)
 
     btn_frame = tk.Frame(root)
     btn_frame.pack(pady=5)

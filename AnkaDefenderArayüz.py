@@ -8,6 +8,10 @@ import platform
 import tkinter as tk
 from tkinter import scrolledtext
 
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from plyer import notification
+
 # ---------------------- AYARLAR ----------------------
 QUARANTINE_DIR = os.path.expanduser("~/.ankantivirus/quarantine")
 LOG_FILE = os.path.expanduser("~/.ankantivirus/log.json")
@@ -72,11 +76,11 @@ def scan_path(root):
             continue
         for name in filenames:
             fpath = os.path.join(dirpath, name)
-            append_output(f"[Tarandı] {fpath}")  # her dosya aksın
+            append_output(f"[Tarandı] {fpath}")
             sha = hash_file(fpath)
             if sha and sha in TEST_SIGNATURES:
                 quarantine(fpath, sha)
-                found_malware.append(fpath)  # sadece listeye ekle
+                found_malware.append(fpath)
     return found_malware
 
 # ---------------------- QUICK SCAN ----------------------
@@ -86,7 +90,6 @@ def quick_scan():
     for folder in [os.path.expanduser("~/Downloads"), os.path.expanduser("~/Desktop")]:
         if os.path.exists(folder):
             found_all.extend(scan_path(folder))
-
     show_report(found_all, "Quick Scan")
 
 # ---------------------- FULL SCAN ----------------------
@@ -95,7 +98,6 @@ def full_scan():
     folder = "C:/" if system == "Windows" else "/"
     append_output(f"[*] Full Scan başlatıldı: {folder}")
     found_all = scan_path(folder)
-
     show_report(found_all, "Full Scan")
 
 # ---------------------- RAPOR ----------------------
@@ -115,6 +117,45 @@ def threaded_scan(scan_func):
     t = threading.Thread(target=scan_func)
     t.start()
 
+# ---------------------- GERÇEK ZAMANLI TARAMA ----------------------
+class RealTimeHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        fpath = event.src_path
+        append_output(f"[Yeni Dosya] {fpath}")
+        sha = hash_file(fpath)
+        if sha and sha in TEST_SIGNATURES:
+            quarantine(fpath, sha)
+            append_output(f"[!] Zararlı dosya bulundu ve karantinaya alındı: {fpath}")
+            # Windows Defender tarzı bildirim
+            notification.notify(
+                title="AnkaAntivirüs - Uyarı",
+                message=f"Zararlı dosya tespit edildi:\n{fpath}",
+                app_name="AnkaAntivirüs",
+                timeout=5
+            )
+
+def start_realtime_scan():
+    paths_to_watch = [os.path.expanduser("~/Downloads"), os.path.expanduser("~/Desktop")]
+    event_handler = RealTimeHandler()
+    observer = Observer()
+    for path in paths_to_watch:
+        if os.path.exists(path):
+            observer.schedule(event_handler, path, recursive=True)
+    observer.start()
+    append_output("[*] Gerçek zamanlı tarama başlatıldı...")
+    try:
+        while True:
+            observer.join(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+def start_realtime_thread():
+    t = threading.Thread(target=start_realtime_scan, daemon=True)
+    t.start()
+
 # ---------------------- GUI ----------------------
 def start_gui():
     global output_text
@@ -131,6 +172,8 @@ def start_gui():
               command=lambda: threaded_scan(quick_scan)).grid(row=0, column=0, padx=5)
     tk.Button(btn_frame, text="Full Scan", width=20,
               command=lambda: threaded_scan(full_scan)).grid(row=0, column=1, padx=5)
+    tk.Button(btn_frame, text="Gerçek Zamanlı Tarama", width=20,
+              command=start_realtime_thread).grid(row=1, column=0, columnspan=3, pady=5)
     tk.Button(btn_frame, text="Çıkış", width=20,
               command=root.destroy).grid(row=0, column=2, padx=5)
 

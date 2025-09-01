@@ -5,8 +5,9 @@ import json
 from datetime import datetime
 import threading
 import platform
-import tkinter as tk
-from tkinter import scrolledtext
+from plyer import notification
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # ---------------------- AYARLAR ----------------------
 QUARANTINE_DIR = os.path.expanduser("~/.ankantivirus/quarantine")
@@ -14,7 +15,6 @@ LOG_FILE = os.path.expanduser("~/.ankantivirus/log.json")
 EXCLUSIONS = ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"]
 
 # ---------------------- TEST İMZASI ----------------------
-# Boş dosya (0 byte) SHA256 hash'i = zararlı kabul edilecek
 TEST_SIGNATURES = {
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }
@@ -50,9 +50,7 @@ def log_event(event):
 
 # ---------------------- ÇIKTI EKLE ----------------------
 def append_output(text):
-    output_text.insert(tk.END, text + "\n")
-    output_text.see(tk.END)
-    output_text.update_idletasks()
+    print(text)
 
 # ---------------------- KARANTİNAYA AL ----------------------
 def quarantine(path, sha):
@@ -61,6 +59,7 @@ def quarantine(path, sha):
         qname = os.path.join(QUARANTINE_DIR, f"Q_{sha[:12]}_{fname}")
         shutil.move(path, qname)
         log_event({"event": "quarantine", "file": path, "sha256": sha})
+        append_output(f"[!] Karantinaya alındı: {path}")
     except Exception as e:
         append_output(f"[!] Karantinaya alınamadı: {e}")
 
@@ -72,21 +71,20 @@ def scan_path(root):
             continue
         for name in filenames:
             fpath = os.path.join(dirpath, name)
-            append_output(f"[Tarandı] {fpath}")  # her dosya aksın
+            append_output(f"[Tarandı] {fpath}")
             sha = hash_file(fpath)
             if sha and sha in TEST_SIGNATURES:
                 quarantine(fpath, sha)
-                found_malware.append(fpath)  # sadece listeye ekle
+                found_malware.append(fpath)
     return found_malware
 
 # ---------------------- QUICK SCAN ----------------------
 def quick_scan():
     append_output("[*] Quick Scan başlatıldı...")
     found_all = []
-    for folder in [os.path.expanduser("~/Downloads"), os.path.expanduser("~/Desktop")]:
+    for folder in [os.path.expanduser("/Downloads"), os.path.expanduser("/Desktop")]:
         if os.path.exists(folder):
             found_all.extend(scan_path(folder))
-
     show_report(found_all, "Quick Scan")
 
 # ---------------------- FULL SCAN ----------------------
@@ -95,7 +93,6 @@ def full_scan():
     folder = "C:/" if system == "Windows" else "/"
     append_output(f"[*] Full Scan başlatıldı: {folder}")
     found_all = scan_path(folder)
-
     show_report(found_all, "Full Scan")
 
 # ---------------------- RAPOR ----------------------
@@ -114,32 +111,70 @@ def show_report(found_all, scan_type):
 def threaded_scan(scan_func):
     t = threading.Thread(target=scan_func)
     t.start()
+    t.join()  # Terminalde bekleyelim ki çıktıyı görelim
 
-# ---------------------- GUI ----------------------
-def start_gui():
-    global output_text
-    root = tk.Tk()
-    root.title("AnkaAntivirüs")
-    root.geometry("800x500")
+# ---------------------- GERÇEK ZAMANLI TARAMA ----------------------
+class RealTimeHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        fpath = event.src_path
+        append_output(f"[Yeni Dosya] {fpath}")
+        sha = hash_file(fpath)
+        if sha and sha in TEST_SIGNATURES:
+            quarantine(fpath, sha)
+            append_output(f"[!] Zararlı dosya bulundu ve karantinaya alındı: {fpath}")
+            notification.notify(
+                title="AnkaAntivirüs - Uyarı",
+                message=f"Zararlı dosya tespit edildi:\n{fpath}",
+                app_name="AnkaAntivirüs",
+                timeout=5
+            )
 
-    tk.Label(root, text="AnkaAntivirüs", font=("Arial", 16, "bold")).pack(pady=10)
+def start_realtime_scan():
+    paths_to_watch = [os.path.expanduser("/Downloads"), os.path.expanduser("/Desktop")]
+    event_handler = RealTimeHandler()
+    observer = Observer()
+    for path in paths_to_watch:
+        if os.path.exists(path):
+            observer.schedule(event_handler, path, recursive=True)
+    observer.start()
+    append_output("[*] Gerçek zamanlı tarama başlatıldı...")
+    try:
+        while True:
+            observer.join(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
 
-    btn_frame = tk.Frame(root)
-    btn_frame.pack(pady=5)
+def start_realtime_thread():
+    t = threading.Thread(target=start_realtime_scan, daemon=True)
+    t.start()
+    t.join()
 
-    tk.Button(btn_frame, text="Quick Scan", width=20,
-              command=lambda: threaded_scan(quick_scan)).grid(row=0, column=0, padx=5)
-    tk.Button(btn_frame, text="Full Scan", width=20,
-              command=lambda: threaded_scan(full_scan)).grid(row=0, column=1, padx=5)
-    tk.Button(btn_frame, text="Çıkış", width=20,
-              command=root.destroy).grid(row=0, column=2, padx=5)
-
-    output_text = scrolledtext.ScrolledText(root, height=25, width=95)
-    output_text.pack(pady=10)
-
-    root.mainloop()
+# ---------------------- TERMINAL MENÜ ----------------------
+def terminal_menu():
+    ensure_dirs()
+    while True:
+        print("\n=== AnkaAntivirüs Terminal ===")
+        print("1. Quick Scan")
+        print("2. Full Scan")
+        print("3. Gerçek Zamanlı Tarama")
+        print("4. Çıkış")
+        choice = input("Seçiminiz: ").strip()
+        if choice == "1":
+            threaded_scan(quick_scan)
+        elif choice == "2":
+            threaded_scan(full_scan)
+        elif choice == "3":
+            print("[!] Gerçek zamanlı tarama başlatıldı. Ctrl+C ile durdurabilirsiniz.")
+            start_realtime_scan()
+        elif choice == "4":
+            print("Çıkış yapılıyor...")
+            break
+        else:
+            print("Geçersiz seçim!")
 
 # ---------------------- MAIN ----------------------
-if __name__ == "__main__":
-    ensure_dirs()
-    start_gui()
+if _name_ == "_main_":
+    terminal_menu()

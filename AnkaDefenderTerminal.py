@@ -5,24 +5,23 @@ import json
 from datetime import datetime
 import threading
 import platform
+from plyer import notification
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # ---------------------- AYARLAR ----------------------
 QUARANTINE_DIR = os.path.expanduser("~/.ankantivirus/quarantine")
-SIGNATURE_FILE = os.path.expanduser("~/.ankantivirus/signatures/sha256_blacklist.txt")
 LOG_FILE = os.path.expanduser("~/.ankantivirus/log.json")
 EXCLUSIONS = ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"]
+
+# ---------------------- TEST İMZASI ----------------------
+TEST_SIGNATURES = {
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
 
 # ---------------------- DİZİN HAZIRLAMA ----------------------
 def ensure_dirs():
     os.makedirs(QUARANTINE_DIR, exist_ok=True)
-    os.makedirs(os.path.dirname(SIGNATURE_FILE), exist_ok=True)
-
-# ---------------------- İMZALARI YÜKLE ----------------------
-def load_signatures():
-    if not os.path.exists(SIGNATURE_FILE):
-        return set()
-    with open(SIGNATURE_FILE, "r", encoding="utf-8") as f:
-        return set(line.strip() for line in f if line.strip())
 
 # ---------------------- DOSYA HASH ----------------------
 def hash_file(path):
@@ -49,6 +48,10 @@ def log_event(event):
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(logs, f, indent=2)
 
+# ---------------------- ÇIKTI EKLE ----------------------
+def append_output(text):
+    print(text)
+
 # ---------------------- KARANTİNAYA AL ----------------------
 def quarantine(path, sha):
     try:
@@ -56,82 +59,122 @@ def quarantine(path, sha):
         qname = os.path.join(QUARANTINE_DIR, f"Q_{sha[:12]}_{fname}")
         shutil.move(path, qname)
         log_event({"event": "quarantine", "file": path, "sha256": sha})
+        append_output(f"[!] Karantinaya alındı: {path}")
     except Exception as e:
-        print(f"[!] Karantinaya alınamadı: {e}")
+        append_output(f"[!] Karantinaya alınamadı: {e}")
 
 # ---------------------- TARAMA ----------------------
-def scan_path(root, signatures):
+def scan_path(root):
     found_malware = []
     for dirpath, dirnames, filenames in os.walk(root):
         if any(dirpath.startswith(ex) for ex in EXCLUSIONS):
             continue
         for name in filenames:
             fpath = os.path.join(dirpath, name)
-            print(f"[Tarandı] {fpath}")  # dosya akışı
+            append_output(f"[Tarandı] {fpath}")
             sha = hash_file(fpath)
-            if sha and sha in signatures:
+            if sha and sha in TEST_SIGNATURES:
                 quarantine(fpath, sha)
                 found_malware.append(fpath)
     return found_malware
 
 # ---------------------- QUICK SCAN ----------------------
 def quick_scan():
-    print("[*] Quick Scan başlatıldı...")
-    signatures = load_signatures()
+    append_output("[*] Quick Scan başlatıldı...")
     found_all = []
-    for folder in [os.path.expanduser("~/Downloads"), os.path.expanduser("~/Desktop")]:
+    for folder in [os.path.expanduser("/Downloads"), os.path.expanduser("/Desktop")]:
         if os.path.exists(folder):
-            found_all.extend(scan_path(folder, signatures))
-    if found_all:
-        print("[!] Zararlı dosyalar bulundu:")
-        for f in found_all:
-            print(f" - {f}")
-        print(f"[!] Son zararlı dosya: {found_all[-1]}")
-    else:
-        print("[*] Zararlı dosya bulunamadı.")
-    print("[*] Quick Scan tamamlandı.")
+            found_all.extend(scan_path(folder))
+    show_report(found_all, "Quick Scan")
 
 # ---------------------- FULL SCAN ----------------------
 def full_scan():
     system = platform.system()
     folder = "C:/" if system == "Windows" else "/"
-    print(f"[*] Full Scan başlatıldı: {folder}")
-    signatures = load_signatures()
-    found_all = scan_path(folder, signatures)
-    if found_all:
-        print("[!] Zararlı dosyalar bulundu:")
-        for f in found_all:
-            print(f" - {f}")
-        print(f"[!] Son zararlı dosya: {found_all[-1]}")
-    else:
-        print("[*] Zararlı dosya bulunamadı.")
-    print("[*] Full Scan tamamlandı.")
+    append_output(f"[*] Full Scan başlatıldı: {folder}")
+    found_all = scan_path(folder)
+    show_report(found_all, "Full Scan")
 
-# ---------------------- TARAMA THREAD ----------------------
+# ---------------------- RAPOR ----------------------
+def show_report(found_all, scan_type):
+    append_output("\n=== SONUÇ RAPORU ===")
+    if found_all:
+        append_output("[!] Zararlı dosyalar bulundu:")
+        for f in found_all:
+            append_output(f" - {f}")
+        append_output(f"[!] Son zararlı dosya: {found_all[-1]}")
+    else:
+        append_output("[*] Zararlı dosya bulunamadı.")
+    append_output(f"[*] {scan_type} tamamlandı.\n")
+
+# ---------------------- THREAD ----------------------
 def threaded_scan(scan_func):
     t = threading.Thread(target=scan_func)
     t.start()
-    t.join()  # terminalde bekle
+    t.join()  # Terminalde bekleyelim ki çıktıyı görelim
 
-# ---------------------- ANA MENÜ ----------------------
-def main_menu():
+# ---------------------- GERÇEK ZAMANLI TARAMA ----------------------
+class RealTimeHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        fpath = event.src_path
+        append_output(f"[Yeni Dosya] {fpath}")
+        sha = hash_file(fpath)
+        if sha and sha in TEST_SIGNATURES:
+            quarantine(fpath, sha)
+            append_output(f"[!] Zararlı dosya bulundu ve karantinaya alındı: {fpath}")
+            notification.notify(
+                title="AnkaAntivirüs - Uyarı",
+                message=f"Zararlı dosya tespit edildi:\n{fpath}",
+                app_name="AnkaAntivirüs",
+                timeout=5
+            )
+
+def start_realtime_scan():
+    paths_to_watch = [os.path.expanduser("/Downloads"), os.path.expanduser("/Desktop")]
+    event_handler = RealTimeHandler()
+    observer = Observer()
+    for path in paths_to_watch:
+        if os.path.exists(path):
+            observer.schedule(event_handler, path, recursive=True)
+    observer.start()
+    append_output("[*] Gerçek zamanlı tarama başlatıldı...")
+    try:
+        while True:
+            observer.join(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+def start_realtime_thread():
+    t = threading.Thread(target=start_realtime_scan, daemon=True)
+    t.start()
+    t.join()
+
+# ---------------------- TERMINAL MENÜ ----------------------
+def terminal_menu():
     ensure_dirs()
     while True:
-        print("\n--- AnkaAntivirüs ---")
+        print("\n=== AnkaAntivirüs Terminal ===")
         print("1. Quick Scan")
         print("2. Full Scan")
-        print("3. Çıkış")
-        choice = input("Seçiminiz: ")
+        print("3. Gerçek Zamanlı Tarama")
+        print("4. Çıkış")
+        choice = input("Seçiminiz: ").strip()
         if choice == "1":
             threaded_scan(quick_scan)
         elif choice == "2":
             threaded_scan(full_scan)
         elif choice == "3":
+            print("[!] Gerçek zamanlı tarama başlatıldı. Ctrl+C ile durdurabilirsiniz.")
+            start_realtime_scan()
+        elif choice == "4":
             print("Çıkış yapılıyor...")
             break
         else:
             print("Geçersiz seçim!")
 
-# ---------------------- BAŞLAT ----------------------
-if __name__ == "__main__":
-    main_menu()
+# ---------------------- MAIN ----------------------
+if _name_ == "_main_":
+    terminal_menu()
